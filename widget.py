@@ -48,7 +48,13 @@ class FileSections(enum.Enum):
     SCOPE = '[Scope]'
 
 
-units = dict()
+class Unit:
+    def __init__(self, name: str, unitType: UnitType):
+        self.name = name
+        self.unitType = unitType
+
+
+units = list()
 currentType = UnitType.ALL
 
 
@@ -61,42 +67,46 @@ class Widget(QWidget):
         self.startStopBtnConn = None
 
     def disableUnit(self, name: str):
-        cmd = ["systemctl", "disable","--", name]
+        cmd = ["systemctl", "disable", "--", name]
         subprocess.run(cmd, shell=False, stdout=subprocess.PIPE)
         onRowSelected()
 
     def enableUnit(self, name: str):
-        cmd = ["systemctl", "enable","--" , name]
+        cmd = ["systemctl", "enable", "--", name]
         subprocess.run(cmd, shell=False, stdout=subprocess.PIPE)
         onRowSelected()
 
     def startUnit(self, name: str):
-        cmd = ["systemctl", "start","--" , name]
+        cmd = ["systemctl", "start", "--", name]
         subprocess.run(cmd, shell=False, stdout=subprocess.PIPE)
         onRowSelected()
+
     def stopUnit(self, name: str):
-        cmd = ["systemctl", "stop","--" , name]
+        cmd = ["systemctl", "stop", "--", name]
         subprocess.run(cmd, shell=False, stdout=subprocess.PIPE)
         onRowSelected()
 
 
-def loadListOfUnits(type: UnitType = UnitType.ALL) -> dict:
-    cmd = ["systemctl", "list-unit-files"] if type == UnitType.ALL else ["systemctl", "list-unit-files", f"--type={type.value}"]
+def loadListOfUnits() -> list:
+    array = []
+    cmd = ["systemctl", "list-unit-files"]
     cmdOutput = str(subprocess.run(cmd, shell=False, stdout=subprocess.PIPE).stdout)
     listedOutput = " ".join(cmdOutput.split()).split("\\n")
     filtredOutput = list(map(str.strip, listedOutput))
-    listOfUnits = list(map(lambda x: x.split()[0::], filtredOutput))[1:-3]
-    result = dict()
-    for i in listOfUnits:
-        result[i[0]] = i[1:3]
-    result = dict(sorted(result.items()))
-    return result
+    filtredOutput = [value for value in filtredOutput if value]
+    listOfUnits = list(map(lambda x: x.split()[0], filtredOutput))[1:-3]
+    for item in listOfUnits:
+        array.append(Unit(item, item.split('.')[-1]))
+    return array
 
 
-def placeDataIntoTable(data: dict, tableWidget: QTableWidget):
+def placeDataIntoTable(data: list, unitType:UnitType, tableWidget: QTableWidget):
+    if unitType != UnitType.ALL:
+        data = list(filter(lambda x: UnitType(x.unitType) == unitType, data))
+
     tableWidget.setRowCount(len(data))
     for i, item in enumerate(data):
-        tableWidget.setItem(i, 0, QTableWidgetItem(item))
+        tableWidget.setItem(i, 0, QTableWidgetItem(item.name))
 
 
 def getUnitPath(name: str) -> Union[str, None]:
@@ -118,11 +128,13 @@ def getAutoRunStatus(name: str) -> str:
     result = str(cmdOut).split("\\n")[1].strip().split(';')[1].strip().split(')')[0]
     return result
 
+
 def getStateStatus(name: str) -> str:
     cmd = ["systemctl", "status", "--", name]
     cmdOut = subprocess.run(cmd, shell=False, stdout=subprocess.PIPE).stdout
     result = str(cmdOut).split("\\n")[2].strip().split()[1]
     return result
+
 
 def getSectionElements(filePath: str, section: FileSections) -> Union[list, None]:
     with open(filePath) as f:
@@ -153,23 +165,23 @@ def getUnitDataFromFile(data: list) -> dict:
 def onLoad():
     global units
     units = loadListOfUnits()
-    placeDataIntoTable(units, widget.ui.tableWidget)
+    placeDataIntoTable(units, UnitType.ALL, widget.ui.tableWidget)
 
 
 def onComboBoxChanged():
     global currentType, units
     strCurrentType = widget.ui.comboBox.currentText()
     currentType = UnitType.ALL if strCurrentType == "All" else UnitType(strCurrentType.lower())
-    units = loadListOfUnits(currentType)
-    placeDataIntoTable(units, widget.ui.tableWidget)
+    placeDataIntoTable(units, currentType, widget.ui.tableWidget)
+    onSearchBarChanged()
 
-    onRowSelected()
 
 
 def onRefreshButtonPressed():
     global currentType, units
-    units = loadListOfUnits(currentType)
-    placeDataIntoTable(units, widget.ui.tableWidget)
+    units = loadListOfUnits()
+    placeDataIntoTable(units,currentType, widget.ui.tableWidget)
+    onRowSelected()
 
 
 def clearMoreLabels():
@@ -180,7 +192,12 @@ def clearMoreLabels():
     widget.ui.labelMoreConflicts.setText('')
     widget.ui.labelMoreAutorun.setText('')
 
-
+def onSearchBarChanged():
+    global units
+    textToSearch = widget.ui.searchBar.text().lower()
+    unitsToShow = list(filter(lambda x: textToSearch in x.name.lower(), units))
+    placeDataIntoTable(unitsToShow, currentType, widget.ui.tableWidget)
+    onRowSelected()
 
 def onRowSelected():
     clearMoreLabels()
@@ -189,7 +206,7 @@ def onRowSelected():
     selectedRow = widget.ui.tableWidget.selectedItems()
     widget.ui.labelMoreName.setText(selectedRow[0].text())
     # widget.ui.labelMoreDescription.setText(selectedRow[4].text())
-    unitPath=getUnitPath(selectedRow[0].text())
+    unitPath = getUnitPath(selectedRow[0].text())
     if unitPath:
         sectionElements = getSectionElements(unitPath, FileSections.UNIT)
         try:
@@ -228,6 +245,10 @@ def onRowSelected():
             widget.ui.labelMoreConflicts.setText(conflictsText)
         except:
             pass
+        try:
+            widget.ui.labelMorePathToUnit.setText(unitPath)
+        except:
+            pass
 
     # Меняю действие кнопок enable/disable
     autorunStatus = getAutoRunStatus(selectedRow[0].text())
@@ -235,9 +256,10 @@ def onRowSelected():
         widget.ui.enableDisableButton.setEnabled(True)
         widget.ui.enableDisableButton.setText('disable')
         widget.ui.labelMoreAutorun.setText('enabled')
-
-        try:widget.ui.enableDisableButton.pressed.disconnect(widget.enableDisableBtnConn)
-        except: pass
+        try:
+            widget.ui.enableDisableButton.pressed.disconnect(widget.enableDisableBtnConn)
+        except:
+            pass
         widget.enableDisableBtnConn = lambda: widget.disableUnit(selectedRow[0].text())
         widget.ui.enableDisableButton.pressed.connect(widget.enableDisableBtnConn)
     elif autorunStatus == 'disabled':
@@ -245,16 +267,19 @@ def onRowSelected():
         widget.ui.enableDisableButton.setText('enable')
         widget.ui.labelMoreAutorun.setText('disabled')
 
-        try: widget.ui.enableDisableButton.pressed.disconnect(widget.enableDisableBtnConn)
-        except: pass
+        try:
+            widget.ui.enableDisableButton.pressed.disconnect(widget.enableDisableBtnConn)
+        except:
+            pass
         widget.enableDisableBtnConn = lambda: widget.enableUnit(selectedRow[0].text())
         widget.ui.enableDisableButton.pressed.connect(widget.enableDisableBtnConn)
     else:
         widget.ui.enableDisableButton.setEnabled(False)
         widget.ui.enableDisableButton.setText('')
-        try: widget.ui.enableDisableButton.pressed.disconnect(widget.enableDisableBtnConn)
-        except: pass
-
+        try:
+            widget.ui.enableDisableButton.pressed.disconnect(widget.enableDisableBtnConn)
+        except:
+            pass
 
     # Меняю действие кнопок start/stop
     activeStatus = getStateStatus(selectedRow[0].text())
@@ -289,9 +314,9 @@ if __name__ == "__main__":
     widget = Widget()
     widget.ui.tableWidget.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
     onLoad()
+    widget.ui.searchBar.textChanged.connect(onSearchBarChanged)
     widget.ui.comboBox.currentIndexChanged.connect(onComboBoxChanged)
     widget.ui.refreshButton.pressed.connect(onRefreshButtonPressed)
     widget.ui.tableWidget.itemSelectionChanged.connect(onRowSelected)
     widget.show()
-
     sys.exit(app.exec())
